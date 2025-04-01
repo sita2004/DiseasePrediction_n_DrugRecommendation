@@ -4,14 +4,15 @@ import pandas as pd
 import pickle
 from fuzzywuzzy import process
 import ast
+import os
 import pymongo
 from io import StringIO
 from io import BytesIO
 app = Flask(__name__)
-app.secret_key = "d7f3b6017b939599d88314e418b1ccbc"  # Important for session management
-
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 # MongoDB setup
-client = pymongo.MongoClient("mongodb+srv://sitanagapavani65:ArsXFXS9WAJtyfP5@cluster0.buv6uml.mongodb.net/")  # Replace with your MongoDB connection string
+mongodb_uri = os.environ.get("MONGODB_URI")  # Get MongoDB URI from environment
+client = pymongo.MongoClient(mongodb_uri)
 db = client["medicine_recommendation"]
 users_collection = db["users"]
 feedback_collection = db["feedback"]
