@@ -11,7 +11,7 @@ app = Flask(__name__)
 app.secret_key = "d7f3b6017b939599d88314e418b1ccbc"  # Important for session management
 
 # MongoDB setup
-client = pymongo.MongoClient("mongodb://localhost:27017")  # Replace with your MongoDB connection string
+client = pymongo.MongoClient("mongodb+srv://sitanagapavani65:ArsXFXS9WAJtyfP5@cluster0.buv6uml.mongodb.net/")  # Replace with your MongoDB connection string
 db = client["medicine_recommendation"]
 users_collection = db["users"]
 feedback_collection = db["feedback"]
