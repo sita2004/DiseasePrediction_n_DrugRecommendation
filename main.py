@@ -4,20 +4,25 @@ import pandas as pd
 import pickle
 from fuzzywuzzy import process
 import ast
-import os
 import pymongo
 from io import StringIO
 from io import BytesIO
+from datetime import datetimev
+from werkzeug.security import generate_password_hash, check_password_hash
+from bson.objectid import ObjectId
+import os
+import joblib
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY")
+app.secret_key = os.urandom(24).hex()
+
 # MongoDB setup
-mongodb_uri = os.environ.get("MONGODB_URI")  # Get MongoDB URI from environment
-client = pymongo.MongoClient(mongodb_uri)
+client = pymongo.MongoClient("mongodb+srv://sitanagapavani65:puppy1334@cluster0.buv6uml.mongodb.net/")
 db = client["medicine_recommendation"]
 users_collection = db["users"]
 feedback_collection = db["feedback"]
+activity_collection = db["user_activity"]
 
-# Loading the datasets from Kaggle website
+# Loading the datasets
 sym_des = pd.read_csv("kaggle_dataset/symptoms_df.csv")
 precautions = pd.read_csv("kaggle_dataset/precautions_df.csv")
 workout = pd.read_csv("kaggle_dataset/workout_df.csv")
@@ -25,9 +30,10 @@ description = pd.read_csv("kaggle_dataset/description.csv")
 medications = pd.read_csv('kaggle_dataset/medications.csv')
 diets = pd.read_csv("kaggle_dataset/diets.csv")
 
-Rf = pickle.load(open('model/RandomForest.pkl', 'rb'))
+# Load the trained model
+Rf = joblib.load(open('model/RandomForest.pkl', 'rb'))
 
-# Here we make a dictionary of symptoms and diseases and preprocess it
+# Symptoms and diseases dictionaries
 symptoms_list = {'itching': 0, 'skin_rash': 1, 'nodal_skin_eruptions': 2, 'continuous_sneezing': 3, 'shivering': 4,
                  'chills': 5, 'joint_pain': 6, 'stomach_pain': 7, 'acidity': 8, 'ulcers_on_tongue': 9,
                  'muscle_wasting': 10, 'vomiting': 11, 'burning_micturition': 12, 'spotting_ urination': 13,
@@ -62,6 +68,7 @@ symptoms_list = {'itching': 0, 'skin_rash': 1, 'nodal_skin_eruptions': 2, 'conti
                  'painful_walking': 121, 'pus_filled_pimples': 122, 'blackheads': 123, 'scurring': 124,
                  'skin_peeling': 125, 'silver_like_dusting': 126, 'small_dents_in_nails': 127,
                  'inflammatory_nails': 128, 'blister': 129, 'red_sore_around_nose': 130, 'yellow_crust_ooze': 131}
+
 diseases_list = {15: 'Fungal infection', 4: 'Allergy', 16: 'GERD', 9: 'Chronic cholestasis', 14: 'Drug Reaction',
                  33: 'Peptic ulcer diseae', 1: 'AIDS', 12: 'Diabetes ', 17: 'Gastroenteritis', 6: 'Bronchial Asthma',
                  23: 'Hypertension ', 30: 'Migraine', 7: 'Cervical spondylosis', 32: 'Paralysis (brain hemorrhage)',
@@ -74,9 +81,8 @@ diseases_list = {15: 'Fungal infection', 4: 'Allergy', 16: 'GERD', 9: 'Chronic c
 
 symptoms_list_processed = {symptom.replace('_', ' ').lower(): value for symptom, value in symptoms_list.items()}
 
-
-# Here we created a function (information) to extract information from all the datasets
 def information(predicted_dis):
+    """Extract information from datasets based on predicted disease"""
     disease_desciption = description[description['Disease'] == predicted_dis]['Description']
     disease_desciption = " ".join([w for w in disease_desciption])
 
@@ -94,21 +100,22 @@ def information(predicted_dis):
 
     return disease_desciption, disease_precautions, disease_medications, disease_diet, disease_workout
 
-# This is the function that passes the user input symptoms to our Model
 def predicted_value(patient_symptoms):
+    """Predict disease based on symptoms"""
     i_vector = np.zeros(len(symptoms_list_processed))
-    for i in patient_symptoms:
-        i_vector[symptoms_list_processed[i]] = 1
+    for symptom in patient_symptoms:
+        if symptom in symptoms_list_processed:
+            i_vector[symptoms_list_processed[symptom]] = 1
     return diseases_list[Rf.predict([i_vector])[0]]
 
-# Function to correct the spellings of the symptom (if any)
 def correct_spelling(symptom):
+    """Correct symptom spelling using fuzzy matching"""
     closest_match, score = process.extractOne(symptom, symptoms_list_processed.keys())
-    # If the similarity score is above a certain threshold, consider it a match
     if score >= 80:
         return closest_match
     else:
         return None
+
 @app.route('/', methods=['GET'])
 def home_page():
     return render_template('home.html')
@@ -116,75 +123,172 @@ def home_page():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
+        email = request.form['email']
         password = request.form['password']
-        user = users_collection.find_one({'username': username, 'password': password})
-        if user:
-            session['username'] = username
-            return redirect(url_for('predict')) # Corrected to predict
+        
+        # Find user by email
+        user = users_collection.find_one({'email': email})
+        
+        if user and user['password'] == password:  # In production, use password hashing
+            session['email'] = email
+            session['username'] = user['username']  # Store both email and username
+            return redirect(url_for('predict'))
         else:
             return render_template('login.html', message='Invalid username or password')
+    
     return render_template('login.html', message=None)
 
-@app.route('/signup', methods=['GET', 'POST'])
+@app.route("/signup", methods=["GET", "POST"])
 def signup():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if users_collection.find_one({'username': username}):
-            return render_template('signup.html', message='Username already exists')
-        users_collection.insert_one({'username': username, 'password': password})
-        return redirect(url_for('login')) # Corrected to redirect to login
-    return render_template('signup.html', message=None)
+    if request.method == "POST":
+        username = request.form["username"]
+        email = request.form["email"]
+        password = request.form["password"]
+
+        # Check if username or email already exists
+        existing_user = users_collection.find_one({"$or": [{"username": username}, {"email": email}]})
+
+        if existing_user:
+            return render_template("signup.html", message="Username or Email already exists!")
+
+        # Insert new user into MongoDB
+        users_collection.insert_one({
+            "username": username,
+            "email": email,
+            "password": password,  # In production, hash this password
+            "created_at": datetime.now()
+        })
+
+        return redirect(url_for("login"))
+
+    return render_template("signup.html", message=None)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('home_page'))
 
 @app.route('/predict', methods=['GET', 'POST'])
-def predict(): #Corrected name to predict
+def predict():
+    # Check if user is logged in
     if 'username' not in session:
         return redirect(url_for('login'))
+
+    all_symptoms = sorted(list(symptoms_list.keys()))
+
     if request.method == 'POST':
-        symptoms = request.form.get('symptoms')
-        if symptoms == "Symptoms":
-            message = "Please either write symptoms or you have written misspelled symptoms"
-            return render_template('index.html', message=message)
-        else:
-            patient_symptoms = [s.strip() for s in symptoms.split(',')]
-            patient_symptoms = [symptom.strip("[]' ") for symptom in patient_symptoms]
-            corrected_symptoms = []
-            for symptom in patient_symptoms:
-                corrected_symptom = correct_spelling(symptom)
-                if corrected_symptom:
-                    corrected_symptoms.append(corrected_symptom)
-                else:
-                    message = f"Symptom '{symptom}' not found in the database."
-                    return render_template('index.html', message=message)
-            predicted_disease = predicted_value(corrected_symptoms)
+        selected_symptoms = request.form.getlist('symptoms')
+        
+        if not selected_symptoms:
+            message = "Please select at least one symptom."
+            return render_template('index.html', message=message, all_symptoms=all_symptoms)
+        
+        try:
+            predicted_disease = predicted_value(selected_symptoms)
             dis_des, precautions, medications, rec_diet, workout = information(predicted_disease)
+            
+            # Process precautions
             my_precautions = []
-            for i in precautions[0]:
-                my_precautions.append(i)
-            medication_list = ast.literal_eval(medications[0])
-            medications = []
-            for item in medication_list:
-                medications.append(item)
-            diet_list = ast.literal_eval(rec_diet[0])
-            rec_diet = []
-            for item in diet_list:
-                rec_diet.append(item)
-            return render_template('index.html', symptoms=corrected_symptoms, predicted_disease=predicted_disease, dis_des=dis_des,
-                                   my_precautions=my_precautions, medications=medications, my_diet=rec_diet,
-                                   workout=workout)
-    return render_template('index.html')
+            if precautions and len(precautions) > 0:
+                for i in precautions[0]:
+                    if i:  # Check if precaution is not None or empty
+                        my_precautions.append(i)
+            
+            # Process medications
+            medications_list = []
+            if medications and len(medications) > 0:
+                try:
+                    medication_list = ast.literal_eval(medications[0])
+                    for item in medication_list:
+                        medications_list.append(item)
+                except (ValueError, SyntaxError):
+                    # If ast.literal_eval fails, treat it as a simple string
+                    medications_list = [medications[0]]
+            
+            # Process diet
+            rec_diet_list = []
+            if rec_diet and len(rec_diet) > 0:
+                try:
+                    diet_list = ast.literal_eval(rec_diet[0])
+                    for item in diet_list:
+                        rec_diet_list.append(item)
+                except (ValueError, SyntaxError):
+                    # If ast.literal_eval fails, treat it as a simple string
+                    rec_diet_list = [rec_diet[0]]
+
+            # Store user activity
+            activity_collection.insert_one({
+                'username': session['username'],
+                'email': session['email'],
+                'timestamp': datetime.now(),
+                'symptoms_input': selected_symptoms,
+                'predicted_disease': predicted_disease
+            })
+
+            return render_template('index.html', 
+                                 symptoms=selected_symptoms, 
+                                 predicted_disease=predicted_disease, 
+                                 dis_des=dis_des,
+                                 my_precautions=my_precautions, 
+                                 medications=medications_list, 
+                                 my_diet=rec_diet_list,
+                                 workout=workout, 
+                                 all_symptoms=all_symptoms)
+                                 
+        except Exception as e:
+            message = f"An error occurred during prediction: {str(e)}"
+            return render_template('index.html', message=message, all_symptoms=all_symptoms)
+    
+    return render_template('index.html', all_symptoms=all_symptoms)
+
+@app.route('/history')
+def history():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    user_history = activity_collection.find({'username': session['username']}).sort('timestamp', pymongo.DESCENDING)
+    history_list = list(user_history)
+    return render_template('history.html', history=history_list)
+
+@app.route('/delete_history/<string:item_id>', methods=['POST'])
+def delete_history(item_id):
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    
+    try:
+        object_id = ObjectId(item_id)
+        result = activity_collection.delete_one({'_id': object_id, 'username': session['username']})
+        
+        if result.deleted_count > 0:
+            print(f"Deleted activity with ID: {item_id} for user: {session['username']}")
+        else:
+            print(f"Activity with ID: {item_id} not found for user: {session['username']}")
+            
+    except Exception as e:
+        print(f"Error deleting history item: {str(e)}")
+    
+    return redirect(url_for('history'))
 
 @app.route('/feedback', methods=['GET', 'POST'])
 def feedback():
     if 'username' not in session:
         return redirect(url_for('login'))
+    
     if request.method == 'POST':
         feedback_text = request.form['feedback']
-        feedback_collection.insert_one({'username': session['username'], 'feedback': feedback_text})
-        return render_template('feedback.html', message='Feedback submitted successfully')
-    return render_template('feedback.html', message=None)
-
+        rating = request.form.get('rating', 0)
+        
+        feedback_collection.insert_one({
+            'username': session['username'],
+            'email': session['email'],
+            'feedback': feedback_text,
+            'rating': int(rating),
+            'timestamp': datetime.now()
+        })
+        
+        return render_template('feedback.html', message="Thank you for your feedback!")
+    
+    return render_template('feedback.html')
 @app.route('/download', methods=['POST'])
 def download():
     predicted_disease = request.form['predicted_disease']
@@ -193,6 +297,14 @@ def download():
     medications = request.form.getlist('medications')
     my_diet = request.form.getlist('my_diet')
     workout = request.form.getlist('workout')
+
+    # # Store download activity
+    # activity_collection.insert_one({
+    #     'username': session['username'],
+    #     'timestamp': datetime.now(tz=None),
+    #     'activity_type': 'download_results',
+    #     'predicted_disease': predicted_disease
+    # })
 
     output = BytesIO()
     output.write(f"Predicted Disease: {predicted_disease}\n\n".encode('utf-8'))
@@ -213,10 +325,5 @@ def download():
     output.seek(0)
     return send_file(output, as_attachment=True, download_name='result.txt', mimetype='text/plain')
 
-@app.route('/logout')
-def logout():
-    session.pop('username', None)
-    return redirect(url_for('login'))
-
-# if __name__ == '__main__':
-#     app.run(debug=True)
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
